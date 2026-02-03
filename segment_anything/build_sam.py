@@ -134,7 +134,7 @@ def load_from(sam, state_dicts, image_size, vit_patch_size):
     pos_embed = new_state_dict['image_encoder.pos_embed']
     token_size = int(image_size // vit_patch_size)
     if pos_embed.shape[1] != token_size:
-        # resize pos embedding, which may sacrifice the performance, but I have no better idea
+        # redimensionner l'embedding de position, ce qui peut sacrifier la performance, mais je n'ai pas de meilleure idée
         pos_embed = pos_embed.permute(0, 3, 1, 2)  # [b, c, h, w]
         pos_embed = F.interpolate(pos_embed, (token_size, token_size),
                                   mode='bilinear',

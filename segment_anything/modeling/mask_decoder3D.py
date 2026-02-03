@@ -264,18 +264,40 @@ class Attention(nn.Module):
 
 
 class LayerNorm3d(nn.Module):
+    """
+    Normalisation de couche pour données volumétriques 3D.
+
+    Identique à celle dans prompt_encoder3D.py.
+    Normalise sur la dimension des canaux pour volumes 3D.
+    """
 
     def __init__(self, num_channels: int, eps: float = 1e-6) -> None:
+        """
+        Initialise LayerNorm3d.
+
+        Arguments:
+            num_channels: Nombre de canaux à normaliser
+            eps: Epsilon pour stabilité numérique
+        """
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(num_channels))
-        self.bias = nn.Parameter(torch.zeros(num_channels))
+        self.weight = nn.Parameter(torch.ones(num_channels))   # γ
+        self.bias = nn.Parameter(torch.zeros(num_channels))    # β
         self.eps = eps
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        u = x.mean(1, keepdim=True)
-        s = (x - u).pow(2).mean(1, keepdim=True)
-        x = (x - u) / torch.sqrt(s + self.eps)
-        x = self.weight[:, None, None, None] * x + self.bias[:, None, None, None]
+        """
+        Normalise : output = γ * (x - μ) / σ + β
+
+        Arguments:
+            x: Volume de forme (N, C, D, H, W)
+
+        Returns:
+            Volume normalisé de même forme
+        """
+        u = x.mean(1, keepdim=True)  # Moyenne sur canaux
+        s = (x - u).pow(2).mean(1, keepdim=True)  # Variance
+        x = (x - u) / torch.sqrt(s + self.eps)  # Normalisation
+        x = self.weight[:, None, None, None] * x + self.bias[:, None, None, None]  # Affine
         return x
 
 
@@ -427,9 +449,20 @@ class MaskDecoder3D(nn.Module):
         return masks, iou_pred
 
 
-# Lightly adapted from
-# https://github.com/facebookresearch/MaskFormer/blob/main/mask_former/modeling/transformer/transformer_predictor.py # noqa
+# Légèrement adapté de
+# https://github.com/facebookresearch/MaskFormer/blob/main/mask_former/modeling/transformer/transformer_predictor.py
 class MLP(nn.Module):
+    """
+    Réseau Multi-Layer Perceptron simple.
+
+    Architecture séquentielle de couches linéaires avec activations ReLU.
+    Utilisé pour :
+    - Hypernetworks (générer poids de masques dynamiquement)
+    - Prédiction IoU (estimer qualité des masques)
+
+    Structure : Linear → ReLU → Linear → ReLU → ... → Linear
+    La dernière couche peut optionnellement appliquer sigmoid.
+    """
 
     def __init__(
         self,
@@ -439,16 +472,57 @@ class MLP(nn.Module):
         num_layers: int,
         sigmoid_output: bool = False,
     ) -> None:
+        """
+        Initialise le MLP.
+
+        Arguments:
+            input_dim (int): Dimension d'entrée du MLP.
+            hidden_dim (int): Dimension des couches cachées.
+                             Toutes les couches intermédiaires ont cette dimension.
+            output_dim (int): Dimension de sortie du MLP.
+            num_layers (int): Nombre total de couches linéaires.
+                             Doit être ≥ 1. Ex: 3 = input→hidden→hidden→output.
+            sigmoid_output (bool): Si True, applique sigmoid à la sortie.
+                                  Utile pour prédire des probabilités [0,1].
+                                  Défaut : False (pas de sigmoid).
+        """
         super().__init__()
         self.num_layers = num_layers
-        h = [hidden_dim] * (num_layers - 1)
+
+        # Construire la liste des dimensions : [input_dim, hidden, ..., output_dim]
+        h = [hidden_dim] * (num_layers - 1)  # Toutes les couches cachées
+
+        # Créer les couches linéaires
+        # zip([input] + [hidden...], [hidden...] + [output])
+        # Donne les paires : (input→hidden), (hidden→hidden), ..., (hidden→output)
         self.layers = nn.ModuleList(
             nn.Linear(n, k) for n, k in zip([input_dim] + h, h + [output_dim]))
+
         self.sigmoid_output = sigmoid_output
 
     def forward(self, x):
+        """
+        Passe avant à travers le MLP.
+
+        Applique séquentiellement : Linear → ReLU → ... → Linear (→ Sigmoid?)
+
+        Arguments:
+            x: Tenseur d'entrée de forme (..., input_dim)
+
+        Returns:
+            Tenseur de sortie de forme (..., output_dim)
+        """
+        # Parcourir toutes les couches
         for i, layer in enumerate(self.layers):
-            x = F.relu(layer(x)) if i < self.num_layers - 1 else layer(x)
+            # Appliquer la couche linéaire
+            x = layer(x)
+
+            # Appliquer ReLU sur toutes les couches sauf la dernière
+            if i < self.num_layers - 1:
+                x = F.relu(x)
+
+        # Optionnel : Appliquer sigmoid à la sortie finale
         if self.sigmoid_output:
             x = F.sigmoid(x)
+
         return x

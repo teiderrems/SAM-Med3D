@@ -108,83 +108,168 @@ def get_dataloaders(args):
 
 
 class BaseTrainer:
+    """
+    Classe de base pour l'entraînement du modèle SAM-Med3D.
+
+    Cette classe gère tout le pipeline d'entraînement :
+    - Initialisation du modèle et des optimisateurs
+    - Chargement et sauvegarde des checkpoints
+    - Boucle d'entraînement avec gestion des clics interactifs
+    - Calcul des métriques (loss, dice score)
+    - Planification du taux d'apprentissage
+    - Visualisation des résultats
+    """
 
     def __init__(self, model, dataloaders, args):
+        """
+        Initialise le trainer avec le modèle et les données.
 
+        Arguments:
+            model: Modèle SAM-Med3D (potentiellement enveloppé dans DDP pour multi-GPU)
+            dataloaders: DataLoader pour les données d'entraînement
+            args: Arguments de configuration (hyperparamètres, chemins, etc.)
+        """
         self.model = model
         self.dataloaders = dataloaders
         self.args = args
-        self.best_loss = np.inf
-        self.best_dice = 0.0
-        self.step_best_loss = np.inf
-        self.step_best_dice = 0.0
+
+        # Initialiser les métriques de suivi
+        self.best_loss = np.inf  # Meilleure perte d'entraînement globale
+        self.best_dice = 0.0  # Meilleur score Dice global
+        self.step_best_loss = np.inf  # Meilleure perte par step
+        self.step_best_dice = 0.0  # Meilleur score Dice par step
+
+        # Listes pour stocker l'historique des métriques
         self.losses = []
         self.dices = []
         self.ious = []
+
+        # Configurer la fonction de perte, l'optimisateur et le scheduler
         self.set_loss_fn()
         self.set_optimizer()
         self.set_lr_scheduler()
+
+        # Charger un checkpoint si reprise d'entraînement, sinon charger les poids pré-entraînés
         if (args.resume):
             self.init_checkpoint(
                 join(self.args.work_dir, self.args.task_name, 'sam_model_latest.pth'))
         else:
             self.init_checkpoint(self.args.checkpoint)
 
+        # Transformation de normalisation Z-score pour les images
+        # Normalise l'image pour avoir moyenne=0 et std=1 (uniquement sur les voxels > 0)
         self.norm_transform = tio.ZNormalization(masking_method=lambda x: x > 0)
 
     def set_loss_fn(self):
+        """
+        Configure la fonction de perte pour l'entraînement.
+
+        DiceCELoss combine deux pertes complémentaires :
+        - Dice Loss: mesure le chevauchement entre prédiction et vérité terrain
+        - Cross-Entropy Loss: mesure la différence au niveau des pixels
+
+        Paramètres:
+            sigmoid=True: applique sigmoid avant le calcul (modèle sort des logits)
+            squared_pred=True: élève les prédictions au carré dans Dice (plus stable)
+            reduction='mean': moyenne les pertes sur le batch
+        """
         self.seg_loss = DiceCELoss(sigmoid=True, squared_pred=True, reduction='mean')
 
     def set_optimizer(self):
+        """
+        Configure l'optimisateur AdamW avec des taux d'apprentissage différenciés.
+
+        Stratégie d'apprentissage:
+        - Image encoder: taux d'apprentissage normal (args.lr)
+        - Prompt encoder: taux réduit (args.lr * 0.1) car déjà bien pré-entraîné
+        - Mask decoder: taux réduit (args.lr * 0.1) car déjà bien pré-entraîné
+
+        Cette approche permet de fine-tuner les composants pré-entraînés doucement
+        tout en permettant à l'encodeur d'image de s'adapter plus rapidement.
+        """
+        # Déballer le modèle si multi-GPU
         if self.args.multi_gpu:
             sam_model = self.model.module
         else:
             sam_model = self.model
 
+        # AdamW: variant d'Adam avec décroissance de poids découplée
         self.optimizer = torch.optim.AdamW(
             [
                 {
                     'params': sam_model.image_encoder.parameters()
-                },  # , 'lr': self.args.lr * 0.1},
+                },  # Taux d'apprentissage normal pour l'encodeur d'image
                 {
                     'params': sam_model.prompt_encoder.parameters(),
-                    'lr': self.args.lr * 0.1
+                    'lr': self.args.lr * 0.1  # Taux réduit pour l'encodeur d'invites
                 },
                 {
                     'params': sam_model.mask_decoder.parameters(),
-                    'lr': self.args.lr * 0.1
+                    'lr': self.args.lr * 0.1  # Taux réduit pour le décodeur de masques
                 },
             ],
-            lr=self.args.lr,
-            betas=(0.9, 0.999),
-            weight_decay=self.args.weight_decay)
+            lr=self.args.lr,  # Taux de base: 8e-4 par défaut
+            betas=(0.9, 0.999),  # Paramètres de momentum pour Adam
+            weight_decay=self.args.weight_decay)  # Régularisation L2: 0.1 par défaut
 
     def set_lr_scheduler(self):
+        """
+        Configure le planificateur de taux d'apprentissage.
+
+        Le scheduler ajuste automatiquement le taux d'apprentissage pendant l'entraînement
+        pour améliorer la convergence et éviter les sur-ajustements.
+
+        Options disponibles:
+        - multisteplr: Réduit le LR à des époques spécifiques (ex: 120, 180)
+        - steplr: Réduit le LR toutes les N époques
+        - coswarm: Décroissance en cosinus avec redémarrages chauds
+        - autres: Décroissance linéaire par défaut
+        """
         if self.args.lr_scheduler == "multisteplr":
+            # Réduit le LR par gamma aux époques spécifiées dans step_size
+            # Ex: LR × 0.1 aux époques 120 et 180
             self.lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer,
                                                                      self.args.step_size,
                                                                      self.args.gamma)
         elif self.args.lr_scheduler == "steplr":
+            # Réduit le LR par gamma toutes les step_size[0] époques
             self.lr_scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer,
                                                                 self.args.step_size[0],
                                                                 self.args.gamma)
         elif self.args.lr_scheduler == 'coswarm':
+            # Décroissance en cosinus avec redémarrages périodiques
+            # Permet au modèle d'explorer différents minima locaux
             self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
                 self.optimizer)
         else:
+            # Décroissance linéaire par défaut (commence à 0.1 × LR)
             self.lr_scheduler = torch.optim.lr_scheduler.LinearLR(self.optimizer, 0.1)
 
     def init_checkpoint(self, ckp_path):
+        """
+        Charge un checkpoint pour initialiser ou reprendre l'entraînement.
+
+        Deux modes de chargement:
+        1. Resume (reprise): Charge tout l'état (modèle, optimisateur, historique)
+        2. From scratch: Charge uniquement les poids du modèle
+
+        Arguments:
+            ckp_path: Chemin vers le fichier de checkpoint (.pth)
+        """
         last_ckpt = None
         if os.path.exists(ckp_path):
             if self.args.multi_gpu:
+                # Synchroniser tous les processus avant de charger
                 dist.barrier()
                 last_ckpt = torch.load(ckp_path, map_location=self.args.device, weights_only=False)
             else:
                 last_ckpt = torch.load(ckp_path, map_location=self.args.device, weights_only=False)
 
         if last_ckpt:
+            # Charger les poids du modèle
             if (self.args.allow_partial_weight):
+                # Chargement partiel: ignorer les poids manquants ou supplémentaires
+                # Utile lors du chargement de poids depuis une architecture légèrement différente
                 if self.args.multi_gpu:
                     self.model.module.load_state_dict(last_ckpt['model_state_dict'], strict=False)
                 else:
@@ -533,7 +618,7 @@ def main_worker(rank, args):
 
 
 def setup(rank, world_size):
-    # initialize the process group
+    # initialiser le groupe de processus
     dist.init_process_group(backend='nccl',
                             init_method=f'tcp://127.0.0.1:{args.port}',
                             world_size=world_size,
