@@ -416,27 +416,54 @@ def add_decomposed_rel_pos(
 
 class PatchEmbed3D(nn.Module):
     """
-    Image to Patch Embedding.
+    Module d'embedding de patches pour volumes 3D.
+
+    Convertit un volume 3D en une séquence de patches via une convolution 3D.
+    Chaque patch est projeté dans un espace d'embedding de dimension fixe.
+
+    Opération équivalente à :
+    1. Découper le volume en patches cubiques non-chevauchants
+    2. Aplatir chaque patch en vecteur
+    3. Projeter linéairement vers embed_dim
+
+    Implémenté efficacement via une convolution 3D avec kernel_size = stride.
     """
 
     def __init__(
             self,
-            kernel_size: Tuple[int, int] = (16, 16, 16),
-            stride: Tuple[int, int] = (16, 16, 16),
-            padding: Tuple[int, int] = (0, 0, 0),
+            kernel_size: Tuple[int, int, int] = (16, 16, 16),
+            stride: Tuple[int, int, int] = (16, 16, 16),
+            padding: Tuple[int, int, int] = (0, 0, 0),
             in_chans: int = 1,
             embed_dim: int = 768,
     ) -> None:
         """
-        Args:
-            kernel_size (Tuple): kernel size of the projection layer.
-            stride (Tuple): stride of the projection layer.
-            padding (Tuple): padding size of the projection layer.
-            in_chans (int): Number of input image channels.
-            embed_dim (int): Patch embedding dimension.
+        Initialise le module d'embedding de patches 3D.
+
+        Arguments:
+            kernel_size (Tuple): Taille de kernel de la couche de projection.
+                                Détermine la taille des patches.
+                                Défaut : (16, 16, 16) → patches 16×16×16.
+
+            stride (Tuple): Stride de la couche de projection.
+                           Détermine le chevauchement entre patches.
+                           Défaut : (16, 16, 16) → pas de chevauchement.
+
+            padding (Tuple): Padding de la couche de projection.
+                            Défaut : (0, 0, 0) → pas de padding.
+
+            in_chans (int): Nombre de canaux de l'image d'entrée.
+                           Défaut : 1 (images médicales en niveaux de gris).
+
+            embed_dim (int): Dimension d'embedding des patches.
+                            Dimension de sortie de la projection.
+                            Défaut : 768 (standard ViT-Base).
         """
         super().__init__()
 
+        # Convolution 3D pour extraire et projeter les patches
+        # in_chans canaux d'entrée → embed_dim canaux de sortie
+        # kernel_size = stride → patches non-chevauchants
         self.proj = nn.Conv3d(in_chans,
                               embed_dim,
                               kernel_size=kernel_size,
@@ -444,7 +471,28 @@ class PatchEmbed3D(nn.Module):
                               padding=padding)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Passe avant : Volume → Séquence de patches projetés.
+
+        Arguments:
+            x: Volume d'entrée de forme (B, C, D, H, W)
+               B = batch, C = canaux, D/H/W = dimensions spatiales
+               Exemple : (1, 1, 256, 256, 256)
+
+        Returns:
+            Patches projetés de forme (B, D', H', W', embed_dim)
+            où D' = D//stride_d, H' = H//stride_h, W' = W//stride_w
+            Exemple : (1, 16, 16, 16, 768) pour stride=(16,16,16)
+
+            Note : Format (B, D, H, W, C) pour compatibilité Transformer
+            (les Transformers traitent la dernière dimension comme canaux)
+        """
+        # Appliquer la convolution : (B, C, D, H, W) → (B, embed_dim, D', H', W')
         x = self.proj(x)
-        # B C X Y Z -> B X Y Z C
+
+        # Permuter pour mettre les canaux en dernière dimension
+        # Format Transformer : (B, seq_len, channels) où seq_len = D'×H'×W'
+        # Ici représenté comme : (B, D', H', W', embed_dim)
         x = x.permute(0, 2, 3, 4, 1)
+
         return x

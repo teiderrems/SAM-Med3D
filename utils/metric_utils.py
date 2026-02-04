@@ -65,7 +65,7 @@ def compute_metrics(gt_path: str,
             return {}
     else:
         raise ValueError(
-            "Invalid 'metrics' argument. Must be 'all' or a list of metric names."
+            "Argument 'metrics' invalide. Doit être 'all' ou une liste de noms de métriques."
         )
 
     try:
@@ -75,50 +75,50 @@ def compute_metrics(gt_path: str,
         gt_data = gt_nii.get_fdata().astype(np.uint8)
         pred_data = pred_nii.get_fdata().astype(np.uint8)
 
-        case_spacing = gt_nii.header.get_zooms()[:3]  # Use only the first 3 dimensions for spacing
+        case_spacing = gt_nii.header.get_zooms()[:3]  # Utiliser seulement les 3 premières dimensions pour l'espacement
 
-        # Determine classes to process
+        # Déterminer les classes à traiter
         if classes is None:
             determined_classes = sorted(np.unique(gt_data).tolist())
             if 0 in determined_classes:
-                determined_classes.remove(0)  # Assume 0 is background
+                determined_classes.remove(0)  # Supposer que 0 est l'arrière-plan
             if not determined_classes:
-                print(f"Warning: No non-zero classes found in ground truth file: {gt_path}")
+                print(f"Avertissement : Aucune classe non nulle trouvée dans le fichier de vérité terrain : {gt_path}")
                 return dict(results)
         else:
-            determined_classes = sorted(list(set(classes))) # Ensure unique and sorted
+            determined_classes = sorted(list(set(classes))) # S'assurer qu'elles sont uniques et triées
 
         if not determined_classes:
-            print("Warning: No classes specified or found to compute metrics for.")
+            print("Avertissement : Aucune classe spécifiée ou trouvée pour calculer les métriques.")
             return dict(results)
 
-        # Loop through each class
+        # Boucler sur chaque classe
         for i in determined_classes:
             class_label = str(i)
             organ_i_gt = (gt_data == i)
             organ_i_pred = (pred_data == i)
 
-            # Handle cases where ground truth or prediction masks might be empty
+            # Gérer les cas où les masques de vérité terrain ou de prédiction peuvent être vides
             gt_empty = np.sum(organ_i_gt) == 0
             pred_empty = np.sum(organ_i_pred) == 0
 
             if gt_empty and pred_empty:
-                # Both GT and prediction are empty for this class
+                # Le GT et la prédiction sont vides pour cette classe
                 if 'dsc' in metrics_to_compute:
-                    results[class_label]['dsc'] = np.nan # Or 1.0 by some conventions
+                    results[class_label]['dsc'] = np.nan # Ou 1.0 selon certaines conventions
                 if 'nsd' in metrics_to_compute:
-                    results[class_label]['nsd'] = np.nan # Or 1.0 by some conventions
-                continue # Move to the next class
+                    results[class_label]['nsd'] = np.nan # Ou 1.0 selon certaines conventions
+                continue # Passer à la classe suivante
             elif gt_empty and not pred_empty:
-                # GT is empty, but prediction is not (false positive)
+                # Le GT est vide, mais la prédiction ne l'est pas (faux positif)
                 if 'dsc' in metrics_to_compute:
                     results[class_label]['dsc'] = 0.0
                 if 'nsd' in metrics_to_compute:
                     results[class_label]['nsd'] = 0.0
-                continue # Move to the next class
-            # If pred_empty and not gt_empty (false negative), DSC and NSD will be 0, handled below.
+                continue # Passer à la classe suivante
+            # Si pred_empty et not gt_empty (faux négatif), DSC et NSD seront 0, géré ci-dessous.
 
-            # --- Compute requested metrics ---
+            # --- Calculer les métriques demandées ---
             try:
                 if 'dsc' in metrics_to_compute:
                     dsc_i = compute_dice_coefficient(organ_i_gt, organ_i_pred)
@@ -155,29 +155,29 @@ def compute_metrics(gt_path: str,
 
     return dict(results)
 
-def print_computed_metrics(results_data: Dict[Any, Any], avg_only=False, title: str = "Computed Metrics"):
+def print_computed_metrics(results_data: Dict[Any, Any], avg_only=False, title: str = "Métriques calculées"):
     """
-    Prints computed metrics in a structured format.
-    Handles two types of input structures:
-    1. Single result set: Dict[str(class_label), Dict[str(metric_name), float(value)]]
-    2. Multi-result set: Dict[str(group_id), Dict[str(class_label), Dict[str(metric_name), float(value)]]]
+    Affiche les métriques calculées dans un format structuré.
+    Gère deux types de structures d'entrée :
+    1. Ensemble de résultats unique : Dict[str(class_label), Dict[str(metric_name), float(value)]]
+    2. Ensemble multi-résultats : Dict[str(group_id), Dict[str(class_label), Dict[str(metric_name), float(value)]]]
 
     Args:
-        results_data: The dictionary containing metric data.
-        title: A title for the printed output.
+        results_data: Le dictionnaire contenant les données de métriques.
+        title: Un titre pour la sortie affichée.
     """
     print(f"\n--- {title} ---")
     if not results_data:
-        print("No results to display.")
+        print("Aucun résultat à afficher.")
         return
 
-    # --- Determine structure and process accordingly ---
+    # --- Déterminer la structure et traiter en conséquence ---
     is_multi_group_type = False
     is_single_set_type = False
     processed_class_metrics: Dict[str, Dict[str, float]] = defaultdict(dict)
 
-    # Try to determine structure by inspecting the first valid entry
-    # This loop finds the first group/class that can inform the structure
+    # Essayer de déterminer la structure en inspectant la première entrée valide
+    # Cette boucle trouve le premier groupe/classe qui peut informer sur la structure
     for _first_level_key, first_level_value in results_data.items():
         if isinstance(first_level_value, dict) and first_level_value: # Must be a non-empty dict
             try:

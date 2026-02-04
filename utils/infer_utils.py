@@ -85,7 +85,7 @@ def random_sample_next_click(prev_mask, gt_mask, method='random'):
         return sampled_point, sampled_label
 
     else:
-        raise ValueError(f"Unsupported method: {method}. Choose 'ritm' or 'random'.")
+        raise ValueError(f"Méthode non prise en charge : {method}. Choisir 'ritm' ou 'random'.")
 
 
 def sam_model_infer(model,
@@ -156,11 +156,12 @@ def sam_model_infer(model,
                 image_pe=model.prompt_encoder.get_dense_pe(),
                 sparse_prompt_embeddings=sparse_embeddings,
                 dense_prompt_embeddings=dense_embeddings,
+                multimask_output=True,
             )
-            # Update prev_low_res_mask for next iteration's prompt encoder input
-            prev_low_res_mask = low_res_masks.detach() 
+            # Mettre à jour prev_low_res_mask pour l'entrée de l'encodeur d'invite de la prochaine itération
+            prev_low_res_mask = low_res_masks.detach()
 
-            # For click generation, use the upscaled version of the current prediction
+            # Pour la génération de clics, utiliser la version agrandie de la prédiction actuelle
             current_prev_mask_for_click_generation = F.interpolate(low_res_masks,
                                    size=roi_image.shape[-3:],
                                    mode='trilinear',
@@ -168,17 +169,23 @@ def sam_model_infer(model,
             current_prev_mask_for_click_generation = torch.sigmoid(current_prev_mask_for_click_generation) > 0.5
 
 
-        # Final high-resolution mask from the last low_res_masks
-        final_masks_hr = F.interpolate(low_res_masks, # Use the final low_res_masks
+        # Masque haute résolution final à partir des derniers low_res_masks
+        final_masks_hr = F.interpolate(low_res_masks, # Utiliser les derniers low_res_masks
                                        size=roi_image.shape[-3:],
                                        mode='trilinear',
                                        align_corners=False)
 
     medsam_seg_prob = torch.sigmoid(final_masks_hr)
+
+    # Gestion de multimask_output=True qui retourne (1, 3, D, H, W)
+    # Prendre le premier masque (index 0) qui est généralement le meilleur
+    if medsam_seg_prob.shape[1] > 1:
+        medsam_seg_prob = medsam_seg_prob[:, 0:1, ...]  # Garder seulement le premier masque
+
     medsam_seg_prob = medsam_seg_prob.cpu().numpy().squeeze()
     medsam_seg_mask = (medsam_seg_prob > 0.5).astype(np.uint8)
 
-    return medsam_seg_mask, low_res_masks.detach() # Return last low_res_mask as well
+    return medsam_seg_mask, low_res_masks.detach() # Retourner aussi le dernier low_res_mask
 
 
 def read_arr_from_nifti(nii_path, get_meta_info=False):
@@ -296,6 +303,14 @@ def data_postprocess(roi_pred_numpy, meta_info):
                     and dtype uint8.
     """
     # Convert the NumPy ROI prediction to a PyTorch tensor.
+    # Ensure it's 3D (D, H, W) before adding channel dimension
+    if roi_pred_numpy.ndim == 4:
+        # If 4D, squeeze batch dimension if present
+        roi_pred_numpy = roi_pred_numpy.squeeze(0) if roi_pred_numpy.shape[0] == 1 else roi_pred_numpy[0]
+
+    if roi_pred_numpy.ndim != 3:
+        raise ValueError(f"Expected 3D array (D,H,W) but got shape {roi_pred_numpy.shape}")
+
     # Add a channel dimension to make it (1, D, H, W).
     # Ensure the dtype is suitable for tio.LabelMap; float32 is safe.
     roi_pred_tensor = torch.from_numpy(roi_pred_numpy.astype(np.float32)).unsqueeze(0)
@@ -380,7 +395,7 @@ def get_category_list_and_zero_mask(gt_path):
 
 
 def validate_paired_img_gt(model, img_path, gt_path, output_path, num_clicks=1, crop_size=128, target_spacing=(1.5, 1.5, 1.5), seed=233):
-    # Set seed hwithin the function
+    # Définir la graine au sein de la fonction
     torch.manual_seed(seed)
     np.random.seed(seed)
 
@@ -393,8 +408,8 @@ def validate_paired_img_gt(model, img_path, gt_path, output_path, num_clicks=1, 
     for category_index in exist_categories:
         category_specific_subject = copy.deepcopy(subject)
         category_specific_meta_info = copy.deepcopy(meta_info)
-        # roi_image is (1,1,D,H,W), roi_label is (1,1,D,H,W)
-        # meta_info contains all necessary affines and shapes
+        # roi_image est (1,1,D,H,W), roi_label est (1,1,D,H,W)
+        # meta_info contient toutes les affines et formes nécessaires
         roi_image, roi_label, meta_info = data_preprocess(category_specific_subject,
                                                           category_specific_meta_info,
                                                           category_index=category_index,
@@ -408,5 +423,5 @@ def validate_paired_img_gt(model, img_path, gt_path, output_path, num_clicks=1, 
         cls_pred_original_grid = data_postprocess(roi_pred_numpy, meta_info)
         final_pred_numpy_original_grid[cls_pred_original_grid == 1] = category_index
 
-    # Save the combined prediction which is on the original GT's grid
+    # Sauvegarder la prédiction combinée qui est sur la grille du GT original
     save_numpy_to_nifti(final_pred_numpy_original_grid, output_path, gt_meta_for_saving)

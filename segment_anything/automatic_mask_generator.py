@@ -313,48 +313,79 @@ class SamAutomaticMaskGenerator:
     def postprocess_small_regions(mask_data: MaskData, min_area: int,
                                   nms_thresh: float) -> MaskData:
         """
-        Removes small disconnected regions and holes in masks, then reruns
-        box NMS to remove any new duplicates.
+        Supprime les petites régions déconnectées et les trous dans les masques.
 
-        Edits mask_data in place.
+        Ce post-traitement améliore la qualité des masques en :
+        1. Supprimant les petites "îles" isolées (régions de premier plan < min_area)
+        2. Remplissant les petits "trous" (régions d'arrière-plan < min_area)
+        3. Réexécutant NMS car les masques modifiés peuvent créer de nouveaux doublons
 
-        Requires open-cv as a dependency.
+        Les masques non modifiés sont préférés lors du NMS (considérés meilleurs).
+
+        Modifie mask_data sur place pour économiser la mémoire.
+
+        Nécessite OpenCV comme dépendance (pour la morphologie mathématique).
+
+        Arguments:
+            mask_data: Structure contenant les masques et métadonnées
+            min_area: Aire minimum en pixels pour conserver une région/trou
+            nms_thresh: Seuil IoU pour la suppression non-maximale
+
+        Returns:
+            MaskData: Les mêmes données avec masques post-traités et filtrés
         """
+        # Cas trivial : aucun masque à traiter
         if len(mask_data["rles"]) == 0:
             return mask_data
 
-        # Filter small disconnected regions and holes
+        # Filtrer les petites régions déconnectées et les trous
         new_masks = []
-        scores = []
+        scores = []  # Scores pour NMS : 1 si inchangé, 0 si modifié
+
         for rle in mask_data["rles"]:
+            # Convertir RLE en masque binaire pour manipulation
             mask = rle_to_mask(rle)
 
+            # Étape 1 : Supprimer les petits trous (régions d'arrière-plan isolées)
+            # mode="holes" : traite les régions de valeur 0 entourées de 1
             mask, changed = remove_small_regions(mask, min_area, mode="holes")
-            unchanged = not changed
+            unchanged = not changed  # Tracker si le masque est modifié
+
+            # Étape 2 : Supprimer les petites îles (régions de premier plan isolées)
+            # mode="islands" : traite les régions de valeur 1 entourées de 0
             mask, changed = remove_small_regions(mask, min_area, mode="islands")
-            unchanged = unchanged and not changed
+            unchanged = unchanged and not changed  # Inchangé seulement si les deux n'ont rien fait
 
             new_masks.append(torch.as_tensor(mask).unsqueeze(0))
-            # Give score=0 to changed masks and score=1 to unchanged masks
-            # so NMS will prefer ones that didn't need postprocessing
+
+            # Attribuer un score : masques inchangés = 1 (priorité), modifiés = 0
+            # NMS préférera les masques qui n'ont pas nécessité de post-traitement
             scores.append(float(unchanged))
 
-        # Recalculate boxes and remove any new duplicates
+        # Recalculer les boîtes englobantes (peuvent avoir changé après post-traitement)
         masks = torch.cat(new_masks, dim=0)
         boxes = batched_mask_to_box(masks)
+
+        # Réexécuter NMS pour supprimer les nouveaux doublons créés par le post-traitement
+        # Les masques avec score=1 (inchangés) seront préférés aux masques avec score=0
         keep_by_nms = batched_nms(
             boxes.float(),
-            torch.as_tensor(scores),
-            torch.zeros_like(boxes[:, 0]),  # categories
+            torch.as_tensor(scores),  # Scores de priorité
+            torch.zeros_like(boxes[:, 0]),  # Catégories (toutes identiques)
             iou_threshold=nms_thresh,
         )
 
-        # Only recalculate RLEs for masks that have changed
+        # Recalculer les RLE uniquement pour les masques qui ont changé
+        # Optimisation : ne pas recalculer inutilement pour les masques inchangés
         for i_mask in keep_by_nms:
-            if scores[i_mask] == 0.0:
+            if scores[i_mask] == 0.0:  # Masque modifié
                 mask_torch = masks[i_mask].unsqueeze(0)
+                # Mettre à jour le RLE avec le masque post-traité
                 mask_data["rles"][i_mask] = mask_to_rle_pytorch(mask_torch)[0]
-                mask_data["boxes"][i_mask] = boxes[i_mask]  # update res directly
+                # Mettre à jour la boîte englobante
+                mask_data["boxes"][i_mask] = boxes[i_mask]
+
+        # Filtrer pour ne garder que les masques sélectionnés par NMS
         mask_data.filter(keep_by_nms)
 
         return mask_data

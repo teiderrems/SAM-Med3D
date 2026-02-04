@@ -1,0 +1,26 @@
+torch
+torchvision
+torchaudio
+torchio
+edt
+prefetch_generator
+
+monai
+nibabel
+SimpleITK
+opencv-python
+scikit-image
+scipy
+numpy
+tqdm
+pandas
+matplotlib
+
+# Pour SAM-Med3D
+einops
+timm
+medim
+requests
+
+# Optionnel mais utile
+pyyaml

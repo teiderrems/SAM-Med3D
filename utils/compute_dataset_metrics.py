@@ -74,62 +74,62 @@ def main():
         gt_file = os.path.join(gt_dir, filename)
 
         if not os.path.exists(gt_file):
-            error_msg = f"Error: Corresponding GT file not found for {filename} at {gt_file}"
+            error_msg = f"Erreur : Fichier GT correspondant non trouvé pour {filename} à {gt_file}"
             print(error_msg)
             errors.append(error_msg)
             missing_gt_count += 1
-            continue  # Skip this file pair
+            continue  # Sauter cette paire de fichiers
 
         try:
-            # Compute metrics for the current file pair
-            # Pass specified_classes if provided, otherwise compute_metrics will determine
+            # Calculer les métriques pour la paire de fichiers actuelle
+            # Passer specified_classes si fourni, sinon compute_metrics déterminera
             metrics_per_class = compute_metrics(gt_file, pred_file, classes=specified_classes)
 
             if not metrics_per_class:
-                error_msg = f"Warning: No metrics computed for {filename}. Check for errors in compute_metrics."
+                error_msg = f"Avertissement : Aucune métrique calculée pour {filename}. Vérifier les erreurs dans compute_metrics."
                 print(error_msg)
                 errors.append(error_msg)
-                # Skip if compute_metrics returned empty (indicating failure or no classes
-                # processed)
+                # Sauter si compute_metrics a retourné vide (indiquant un échec ou aucune classe
+                # traitée)
                 continue
 
-            # Store results for this file
+            # Stocker les résultats pour ce fichier
             all_file_results[filename] = metrics_per_class
 
-            # Aggregate results for overall calculation
+            # Agréger les résultats pour le calcul global
             for class_id_str, metrics in metrics_per_class.items():
-                class_id = int(class_id_str)  # Convert string key back to int
+                class_id = int(class_id_str)  # Convertir la clé chaîne en int
                 aggregated_class_results[class_id]['dsc'].append(metrics.get('dsc', np.nan))
                 aggregated_class_results[class_id]['nsd'].append(metrics.get('nsd', np.nan))
 
             processed_files_count += 1
 
         except FileNotFoundError as e:
-            # This should ideally be caught by the os.path.exists check, but as a safeguard
-            error_msg = f"Fatal Error (should not happen): File not found during compute_metrics for {filename}: {e}"
+            # Cela devrait idéalement être capturé par la vérification os.path.exists, mais comme protection
+            error_msg = f"Erreur fatale (ne devrait pas arriver) : Fichier non trouvé pendant compute_metrics pour {filename} : {e}"
             print(error_msg)
             errors.append(error_msg)
         except Exception as e:
-            error_msg = f"Error processing file pair {filename}: {str(e)}"
+            error_msg = f"Erreur lors du traitement de la paire de fichiers {filename} : {str(e)}"
             print(error_msg)
             errors.append(error_msg)
 
-    print(f"\nFinished processing. Successfully processed {processed_files_count} file pairs.")
+    print(f"\nTraitement terminé. {processed_files_count} paires de fichiers traitées avec succès.")
     if missing_gt_count > 0:
-        print(f"Skipped {missing_gt_count} prediction files due to missing GT.")
+        print(f"Sauté {missing_gt_count} fichiers de prédiction en raison de GT manquant.")
     if errors:
-        print(f"Encountered {len(errors)} errors during processing.")
+        print(f"Rencontré {len(errors)} erreurs pendant le traitement.")
 
-    # --- Calculate and print summary results ---
+    # --- Calculer et afficher les résultats récapitulatifs ---
 
     if not all_file_results:
-        print("No results were successfully computed.")
+        print("Aucun résultat n'a été calculé avec succès.")
         return
 
-    # Determine the actual classes processed (from aggregated results keys)
+    # Déterminer les classes réellement traitées (à partir des clés des résultats agrégés)
     processed_classes = sorted(aggregated_class_results.keys())
 
-    print("\n====== Per-Class Evaluation Results (Mean ± Std) ======")
+    print("\n====== Résultats d'évaluation par classe (Moyenne ± Écart-type) ======")
     per_class_summary = {}
     for class_id in processed_classes:
         dsc_values = np.array(aggregated_class_results[class_id]['dsc'])
@@ -201,7 +201,7 @@ def main():
 
     print("======================================================")
 
-    # --- Save results to JSON if requested ---
+    # --- Sauvegarder les résultats en JSON si demandé ---
     if output_json_path:
         results_data = {
             "metadata": {
@@ -221,9 +221,9 @@ def main():
         try:
             with open(output_json_path, 'w') as f:
                 json.dump(results_data, f, indent=4)
-            print(f"\nDetailed results saved to {output_json_path}")
+            print(f"\nRésultats détaillés sauvegardés dans {output_json_path}")
         except Exception as e:
-            print(f"Error saving results to JSON file {output_json_path}: {str(e)}")
+            print(f"Erreur lors de la sauvegarde des résultats dans le fichier JSON {output_json_path} : {str(e)}")
 
 
 if __name__ == "__main__":

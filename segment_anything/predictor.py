@@ -131,9 +131,9 @@ class SamPredictor:
             a subsequent iteration as mask input.
         """
         if not self.is_image_set:
-            raise RuntimeError("An image must be set with .set_image(...) before mask prediction.")
+            raise RuntimeError("Une image doit être définie avec .set_image(...) avant la prédiction de masque.")
 
-        # Transform input prompts
+        # Transformer les invites d'entrée
         coords_torch, labels_torch, box_torch, mask_input_torch = None, None, None, None
         if point_coords is not None:
             assert (point_labels
@@ -245,24 +245,58 @@ class SamPredictor:
 
     def get_image_embedding(self) -> torch.Tensor:
         """
-        Returns the image embeddings for the currently set image, with
-        shape 1xCxHxW, where C is the embedding dimension and (H,W) are
-        the embedding spatial dimension of SAM (typically C=256, H=W=64).
+        Retourne les embeddings d'image pour l'image actuellement définie.
+
+        Les embeddings d'image sont les représentations de caractéristiques calculées par
+        l'encodeur d'image de SAM. Ces embeddings capturent l'information visuelle de l'image
+        sous une forme compacte et riche en sémantique, qui peut ensuite être utilisée
+        efficacement pour générer des masques de segmentation avec différentes invites.
+
+        Returns:
+          torch.Tensor: Les embeddings d'image avec la forme 1xCxHxW, où:
+            - 1 est la dimension du batch (une seule image)
+            - C est la dimension d'embedding (typiquement 256 pour SAM)
+            - H et W sont les dimensions spatiales des embeddings (typiquement 64x64 pour SAM)
+
+        Raises:
+          RuntimeError: Si aucune image n'a été définie via set_image().
         """
+        # Vérifier qu'une image a été définie
         if not self.is_image_set:
             raise RuntimeError(
-                "An image must be set with .set_image(...) to generate an embedding.")
-        assert self.features is not None, "Features must exist if an image has been set."
+                "Une image doit être définie avec .set_image(...) pour générer un embedding.")
+        # Vérification de sécurité que les features existent
+        assert self.features is not None, "Les features doivent exister si une image a été définie."
         return self.features
 
     @property
     def device(self) -> torch.device:
+        """
+        Retourne le périphérique PyTorch utilisé par le modèle.
+
+        Returns:
+          torch.device: Le périphérique (CPU ou GPU) sur lequel le modèle SAM est chargé.
+                       Toutes les opérations de prédiction seront effectuées sur ce périphérique.
+        """
         return self.model.device
 
     def reset_image(self) -> None:
-        """Resets the currently set image."""
+        """
+        Réinitialise l'image actuellement définie et libère la mémoire associée.
+
+        Cette méthode efface tous les états liés à l'image précédente, y compris les
+        embeddings d'image calculés et les informations de taille. Elle doit être appelée
+        avant de définir une nouvelle image, ou peut être appelée manuellement pour libérer
+        de la mémoire lorsque vous avez terminé avec l'image actuelle.
+
+        Après l'appel de cette méthode, vous devrez définir une nouvelle image avec
+        set_image() avant de pouvoir faire de nouvelles prédictions.
+        """
+        # Marquer qu'aucune image n'est actuellement définie
         self.is_image_set = False
+        # Libérer les embeddings d'image de la mémoire
         self.features = None
+        # Réinitialiser les informations de taille stockées
         self.orig_h = None
         self.orig_w = None
         self.input_h = None

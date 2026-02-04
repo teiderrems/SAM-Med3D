@@ -222,7 +222,7 @@ class Dataset_Union_ALL_Infer(Dataset):
     def _set_file_paths(self, paths):
         self.image_paths = []
 
-        # if ${path}/infer exists, search all .nii.gz
+        # si ${path}/infer existe, rechercher tous les .nii.gz
         for path in paths:
             d = os.path.join(path, f"{self.data_type}")
             if os.path.exists(d):

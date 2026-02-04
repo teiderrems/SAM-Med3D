@@ -164,9 +164,9 @@ def get_next_click3D_torch_ritm(prev_seg, gt_semantic_seg):
     fn_max_dist = torch.max(fn_mask_dt)
     fp_max_dist = torch.max(fp_mask_dt)
     is_positive = (fn_max_dist
-                   > fp_max_dist)  # the biggest area is selected to be interaction point
+                   > fp_max_dist)  # la plus grande zone est sélectionnée pour être le point d'interaction
     dt = fn_mask_dt if is_positive else fp_mask_dt
-    to_point_mask = dt > (max(fn_max_dist, fp_max_dist) / 2.0)  # use a erosion area
+    to_point_mask = dt > (max(fn_max_dist, fp_max_dist) / 2.0)  # utiliser une zone d'érosion
     to_point_mask = to_point_mask[None, None]
     # import pdb; pdb.set_trace()
 

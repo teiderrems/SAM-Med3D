@@ -9,9 +9,9 @@ from tqdm import tqdm
 from utils.infer_utils import validate_paired_img_gt
 
 if __name__ == "__main__":
-    ''' prepare the pre-trained model with local path or huggingface url '''
+    ''' préparer le modèle pré-entraîné avec un chemin local ou une URL huggingface '''
     # ckpt_path = "https://huggingface.co/blueyo0/SAM-Med3D/blob/main/sam_med3d_turbo.pth"
-    # or you can use a local path like:
+    # ou vous pouvez utiliser un chemin local comme :
     # ckpt_path = "./ckpt/sam_med3d_turbo.pth"
 
     test_data_list = [
